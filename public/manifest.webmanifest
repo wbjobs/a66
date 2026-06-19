@@ -1,0 +1,9 @@
+{
+  "short_name": "OCR翻译助手",
+  "name": "OCR翻译助手 - 图片OCR文字识别与翻译",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#1a1b26",
+  "theme_color": "#7aa2f7",
+  "description": "基于Tauri的桌面OCR翻译工具，支持截图/导入图片，Tesseract OCR识别，SQLite全文检索，字幕叠加翻译"
+}

@@ -1,0 +1,28 @@
+{
+  "name": "ocr-translate-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^1.5.3",
+    "vue": "^3.4.0",
+    "vue-router": "^4.2.5",
+    "pinia": "^2.1.7"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^1.5.9",
+    "@vitejs/plugin-vue": "^5.0.0",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.10",
+    "vue-tsc": "^1.8.25",
+    "@types/node": "^20.10.6"
+  }
+}

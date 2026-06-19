@@ -32,3 +32,14 @@ __pycache__/
 # Env
 .env
 .env.local
+
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock.bak
+src-tauri/target/
+
+# Tauri
+src-tauri/gen/
+src-tauri/Cargo.lock
+src-tauri/*.log
