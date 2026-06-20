@@ -108,3 +108,47 @@ pub struct BlockWithTranslation {
     pub block: OcrTextBlock,
     pub translation: TranslateResult,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextStyle {
+    pub font_path: Option<String>,
+    pub font_size: f32,
+    pub color: (u8, u8, u8),
+    pub stroke_color: Option<(u8, u8, u8)>,
+    pub stroke_width: f32,
+    pub bold: bool,
+    pub italic: bool,
+}
+
+impl Default for TextStyle {
+    fn default() -> Self {
+        Self {
+            font_path: None,
+            font_size: 24.0,
+            color: (0, 0, 0),
+            stroke_color: Some((255, 255, 255)),
+            stroke_width: 1.0,
+            bold: false,
+            italic: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InpaintOptions {
+    pub inpaint_radius: i32,
+    pub text_style: TextStyle,
+    pub export_format: String,
+    pub quality: u8,
+}
+
+impl Default for InpaintOptions {
+    fn default() -> Self {
+        Self {
+            inpaint_radius: 3,
+            text_style: TextStyle::default(),
+            export_format: "png".to_string(),
+            quality: 95,
+        }
+    }
+}

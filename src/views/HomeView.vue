@@ -23,6 +23,13 @@
         <button @click="runOcr" :disabled="appStore.loading">
           {{ appStore.ocrBlocks.length ? '🔄 重新识别' : '🔍 OCR识别' }}
         </button>
+        <button 
+          class="export-btn" 
+          @click="showExportDialog = true" 
+          :disabled="!translationResults.length || exporting"
+        >
+          {{ exporting ? '⏳ 导出中...' : '📥 导出修复图' }}
+        </button>
       </div>
     </div>
 
@@ -125,24 +132,176 @@
         </div>
       </div>
     </div>
+
+    <div v-if="showExportDialog" class="export-dialog-overlay" @click.self="showExportDialog = false">
+      <div class="export-dialog">
+        <div class="dialog-header">
+          <h3>📥 导出修复后图片</h3>
+          <button class="close-btn" @click="showExportDialog = false">✕</button>
+        </div>
+        
+        <div class="dialog-body">
+          <div class="form-group">
+            <label>选择字体</label>
+            <select v-model="exportOptions.text_style.font_path" class="form-control">
+              <option value="">自动检测</option>
+              <option v-for="font in availableFonts" :key="font" :value="font.split('|')[1]">
+                {{ font.split('|')[0] }}
+              </option>
+            </select>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>字体大小</label>
+              <input 
+                type="number" 
+                v-model.number="exportOptions.text_style.font_size" 
+                min="8" 
+                max="200"
+                class="form-control"
+              />
+            </div>
+            <div class="form-group">
+              <label>修复半径</label>
+              <input 
+                type="number" 
+                v-model.number="exportOptions.inpaint_radius" 
+                min="1" 
+                max="20"
+                class="form-control"
+              />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>文字颜色</label>
+              <input 
+                type="color" 
+                :value="rgbToHex(exportOptions.text_style.color)" 
+                @input="exportOptions.text_style.color = hexToRgb($event.target.value)"
+                class="form-control color-picker"
+              />
+            </div>
+            <div class="form-group">
+              <label>描边颜色</label>
+              <div class="color-row">
+                <input 
+                  type="checkbox" 
+                  v-model="useStroke" 
+                  id="useStroke"
+                />
+                <label for="useStroke" class="checkbox-label">启用</label>
+                <input 
+                  type="color" 
+                  :value="useStroke && exportOptions.text_style.stroke_color ? rgbToHex(exportOptions.text_style.stroke_color) : '#ffffff'" 
+                  @input="exportOptions.text_style.stroke_color = hexToRgb($event.target.value)"
+                  :disabled="!useStroke"
+                  class="form-control color-picker"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>导出格式</label>
+              <select v-model="exportOptions.export_format" class="form-control">
+                <option value="png">PNG (无损)</option>
+                <option value="jpeg">JPEG (有损)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>JPEG 质量</label>
+              <input 
+                type="range" 
+                v-model.number="exportOptions.quality" 
+                min="1" 
+                max="100"
+                :disabled="exportOptions.export_format !== 'jpeg'"
+                class="form-control range"
+              />
+              <span class="range-value">{{ exportOptions.quality }}%</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>输出路径</label>
+            <div class="path-row">
+              <input 
+                type="text" 
+                v-model="outputPath" 
+                placeholder="点击选择保存位置..."
+                readonly
+                class="form-control path-input"
+              />
+              <button class="browse-btn" @click="selectOutputPath">📁</button>
+            </div>
+          </div>
+
+          <div class="preview-info">
+            <p>将处理 <strong>{{ translationResults.length }}</strong> 个文字块</p>
+            <p class="hint">原图文字将被背景修复后替换为翻译文字</p>
+          </div>
+        </div>
+
+        <div class="dialog-footer">
+          <button class="secondary" @click="showExportDialog = false">取消</button>
+          <button 
+            class="primary" 
+            @click="doExport" 
+            :disabled="exporting || !outputPath"
+          >
+            {{ exporting ? '⏳ 处理中...' : '✅ 开始导出' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useAppStore } from '@/store/app'
 import ImageUploader from '@/components/ImageUploader.vue'
 import ImageCanvas from '@/components/ImageCanvas.vue'
-import type { OcrTextBlock } from '@/types'
+import type { OcrTextBlock, InpaintOptions, BlockWithTranslation, TranslateResult } from '@/types'
+import { defaultInpaintOptions } from '@/types'
+import { save } from '@tauri-apps/api/dialog'
 
 const appStore = useAppStore()
 
 const imageCanvasRef = ref<InstanceType<typeof ImageCanvas> | null>(null)
 const activeTab = ref<'text' | 'translate'>('text')
 const translating = ref(false)
+const exporting = ref(false)
+const showExportDialog = ref(false)
+const outputPath = ref('')
+const availableFonts = ref<string[]>([])
+const useStroke = ref(true)
 const translationResults = ref<
   Array<{ block: OcrTextBlock; translated_text: string }>
 >([])
+
+const exportOptions = ref<InpaintOptions>(defaultInpaintOptions())
+
+watch(useStroke, (val) => {
+  if (val) {
+    exportOptions.value.text_style.stroke_color = exportOptions.value.text_style.stroke_color || [255, 255, 255]
+    exportOptions.value.text_style.stroke_width = exportOptions.value.text_style.stroke_width || 1
+  } else {
+    exportOptions.value.text_style.stroke_color = undefined
+  }
+})
+
+onMounted(async () => {
+  try {
+    availableFonts.value = await appStore.listFonts()
+  } catch (e) {
+    console.warn('加载字体列表失败:', e)
+  }
+})
 
 async function handleFileSelected(filePath: string) {
   try {
@@ -217,6 +376,80 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B'
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
   return (bytes / 1024 / 1024).toFixed(1) + ' MB'
+}
+
+function rgbToHex(rgb: [number, number, number]): string {
+  return '#' + rgb.map(c => c.toString(16).padStart(2, '0')).join('')
+}
+
+function hexToRgb(hex: string): [number, number, number] {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
+  return result
+    ? [
+        parseInt(result[1], 16),
+        parseInt(result[2], 16),
+        parseInt(result[3], 16)
+      ]
+    : [0, 0, 0]
+}
+
+async function selectOutputPath() {
+  try {
+    const ext = exportOptions.value.export_format
+    const defaultName = `translated_${Date.now()}.${ext}`
+    const path = await save({
+      defaultPath: defaultName,
+      filters: [
+        {
+          name: ext === 'png' ? 'PNG 图片' : 'JPEG 图片',
+          extensions: [ext]
+        }
+      ]
+    })
+    if (path) {
+      outputPath.value = path
+    }
+  } catch (e) {
+    console.warn('选择路径取消:', e)
+  }
+}
+
+async function doExport() {
+  if (!outputPath.value || !translationResults.value.length) return
+
+  exporting.value = true
+  try {
+    await appStore.initPainter(exportOptions.value.text_style.font_path || undefined)
+
+    const translations: BlockWithTranslation[] = translationResults.value.map(item => {
+      const tr: TranslateResult = {
+        id: 0,
+        ocr_block_id: item.block.id,
+        source_text: item.block.text,
+        translated_text: item.translated_text,
+        source_lang: 'en',
+        target_lang: 'zh',
+        created_at: new Date().toISOString()
+      }
+      return {
+        block: item.block,
+        translation: tr
+      }
+    })
+
+    const resultPath = await appStore.exportInpainted(
+      translations,
+      outputPath.value,
+      exportOptions.value
+    )
+
+    alert(`✅ 导出成功！\n\n保存位置: ${resultPath}`)
+    showExportDialog.value = false
+  } catch (e) {
+    alert('❌ 导出失败: ' + String(e))
+  } finally {
+    exporting.value = false
+  }
 }
 </script>
 
@@ -495,5 +728,205 @@ function formatSize(bytes: number): string {
   color: var(--text-muted);
   font-size: 12px;
   padding: 2px 0;
+}
+
+.export-btn {
+  background: linear-gradient(135deg, var(--success), var(--accent));
+  color: white;
+  border: none;
+}
+
+.export-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.export-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.export-dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+
+.export-dialog {
+  background: var(--bg-secondary);
+  border-radius: 12px;
+  width: 500px;
+  max-width: 90vw;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border);
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dialog-header h3 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text-primary);
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  font-size: 18px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.close-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.dialog-body {
+  padding: 20px;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-group label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.form-control {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.form-control:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.form-control:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.form-row {
+  display: flex;
+  gap: 12px;
+}
+
+.form-row .form-group {
+  flex: 1;
+}
+
+.color-picker {
+  height: 40px;
+  padding: 2px;
+  cursor: pointer;
+}
+
+.color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkbox-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 0;
+}
+
+.path-row {
+  display: flex;
+  gap: 8px;
+}
+
+.path-input {
+  flex: 1;
+  cursor: pointer;
+}
+
+.browse-btn {
+  padding: 8px 16px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.browse-btn:hover {
+  background: var(--bg-primary);
+}
+
+.range {
+  flex: 1;
+}
+
+.range-value {
+  display: inline-block;
+  min-width: 40px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.preview-info {
+  margin-top: 20px;
+  padding: 16px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.preview-info p {
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.preview-info p:last-child {
+  margin-bottom: 0;
+}
+
+.preview-info .hint {
+  font-size: 12px;
+  color: var(--text-muted);
 }
 </style>

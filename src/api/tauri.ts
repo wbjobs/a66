@@ -6,7 +6,9 @@ import type {
   Rect,
   OcrProcessOptions,
   TranslateOptions,
-  SearchResult
+  SearchResult,
+  InpaintOptions,
+  BlockWithTranslation
 } from '@/types'
 
 export async function initDatabase(): Promise<void> {
@@ -93,4 +95,26 @@ export async function getImageByHash(hash: string): Promise<ImageRecord | null> 
 
 export async function getTranslations(ocrBlockId: number): Promise<TranslateResult[]> {
   return invoke('get_translations', { ocrBlockId })
+}
+
+export async function initInpainter(fontPath?: string): Promise<void> {
+  return invoke('init_inpainter', { fontPath })
+}
+
+export async function exportInpaintedImage(
+  imagePath: string,
+  translations: BlockWithTranslation[],
+  outputPath: string,
+  options?: InpaintOptions
+): Promise<string> {
+  return invoke('export_inpainted_image', {
+    imagePath,
+    translations,
+    outputPath,
+    options
+  })
+}
+
+export async function listAvailableFonts(): Promise<string[]> {
+  return invoke('list_available_fonts')
 }

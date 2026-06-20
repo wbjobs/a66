@@ -7,6 +7,7 @@ pub mod translator;
 pub mod tokenizer;
 pub mod utils;
 pub mod commands;
+pub mod image_inpaint;
 
 use std::sync::Arc;
 
@@ -58,6 +59,9 @@ pub fn run() {
             commands::get_image_by_id,
             commands::get_image_by_hash,
             commands::get_translations,
+            commands::init_inpainter,
+            commands::export_inpainted_image,
+            commands::list_available_fonts,
         ])
         .run(tauri::generate_context!())
         .expect("启动Tauri应用失败");

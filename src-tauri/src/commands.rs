@@ -8,6 +8,7 @@ use crate::db::DB;
 use crate::ocr::OCR;
 use crate::translator::TRANSLATOR;
 use crate::utils::now_str;
+use crate::image_inpaint;
 use crate::{AppResult, AppError};
 
 fn compute_hash(path: &str) -> AppResult<String> {
@@ -267,4 +268,71 @@ pub fn get_image_by_hash(hash: String) -> AppResult<Option<ImageRecord>> {
 #[tauri::command]
 pub fn get_translations(ocr_block_id: i64) -> AppResult<Vec<TranslateResult>> {
     DB.get_translations(ocr_block_id)
+}
+
+#[tauri::command]
+pub fn init_inpainter(font_path: Option<String>) -> AppResult<()> {
+    image_inpaint::init_inpainter(font_path.as_deref())
+}
+
+#[tauri::command]
+pub fn export_inpainted_image(
+    image_path: String,
+    translations: Vec<BlockWithTranslation>,
+    options: Option<InpaintOptions>,
+    output_path: String,
+) -> AppResult<String> {
+    let opts = options.unwrap_or_default();
+    
+    let inpainter_guard = image_inpaint::get_inpainter()?;
+    let inpainter = inpainter_guard.as_ref().ok_or_else(|| {
+        AppError::Image("图像修复器未初始化".to_string())
+    })?;
+    
+    let result = inpainter.process_image(
+        &image_path,
+        &translations,
+        &opts,
+        &output_path,
+    )?;
+    
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn list_available_fonts() -> AppResult<Vec<String>> {
+    let mut fonts = Vec::new();
+    
+    let candidates = if cfg!(windows) {
+        vec![
+            (r"C:\Windows\Fonts\msyh.ttc", "微软雅黑"),
+            (r"C:\Windows\Fonts\msyh.ttf", "微软雅黑"),
+            (r"C:\Windows\Fonts\simhei.ttf", "黑体"),
+            (r"C:\Windows\Fonts\simsun.ttc", "宋体"),
+            (r"C:\Windows\Fonts\simkai.ttf", "楷体"),
+            (r"C:\Windows\Fonts\simfang.ttf", "仿宋"),
+        ]
+    } else if cfg!(target_os = "macos") {
+        vec![
+            ("/System/Library/Fonts/PingFang.ttc", "苹方"),
+            ("/System/Library/Fonts/STHeiti Medium.ttc", "华文黑体"),
+            ("/Library/Fonts/Arial Unicode.ttf", "Arial Unicode"),
+            ("/System/Library/Fonts/Helvetica.ttc", "Helvetica"),
+        ]
+    } else {
+        vec![
+            ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "DejaVu Sans"),
+            ("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", "Noto Sans CJK"),
+            ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "Noto Sans CJK"),
+            ("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc", "文泉驿微米黑"),
+        ]
+    };
+    
+    for (path, name) in candidates {
+        if Path::new(path).exists() {
+            fonts.push(format!("{}|{}", name, path));
+        }
+    }
+    
+    Ok(fonts)
 }

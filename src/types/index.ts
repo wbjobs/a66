@@ -58,3 +58,46 @@ export interface TranslateOptions {
   source_lang?: string
   target_lang?: string
 }
+
+export interface BlockWithTranslation {
+  block: OcrTextBlock
+  translation: TranslateResult
+}
+
+export interface TextStyle {
+  font_path?: string
+  font_size: number
+  color: [number, number, number]
+  stroke_color?: [number, number, number]
+  stroke_width: number
+  bold: boolean
+  italic: boolean
+}
+
+export interface InpaintOptions {
+  inpaint_radius: number
+  text_style: TextStyle
+  export_format: string
+  quality: number
+}
+
+export function defaultTextStyle(): TextStyle {
+  return {
+    font_path: undefined,
+    font_size: 24,
+    color: [0, 0, 0],
+    stroke_color: [255, 255, 255],
+    stroke_width: 1,
+    bold: false,
+    italic: false
+  }
+}
+
+export function defaultInpaintOptions(): InpaintOptions {
+  return {
+    inpaint_radius: 3,
+    text_style: defaultTextStyle(),
+    export_format: 'png',
+    quality: 95
+  }
+}

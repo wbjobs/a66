@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { ImageRecord, OcrTextBlock } from '@/types'
+import type { ImageRecord, OcrTextBlock, InpaintOptions, BlockWithTranslation } from '@/types'
 import {
   initDatabase,
   saveImage,
@@ -12,7 +12,10 @@ import {
   searchFulltext,
   getImageHistory,
   getImageById,
-  getImageByHash
+  getImageByHash,
+  initInpainter,
+  exportInpaintedImage,
+  listAvailableFonts
 } from '@/api/tauri'
 
 export const useAppStore = defineStore('app', () => {
@@ -135,6 +138,30 @@ export const useAppStore = defineStore('app', () => {
     return result
   }
 
+  async function initPainter(fontPath?: string) {
+    return initInpainter(fontPath)
+  }
+
+  async function exportInpainted(
+    translations: BlockWithTranslation[],
+    outputPath: string,
+    options?: InpaintOptions
+  ) {
+    if (!currentImage.value) {
+      throw new Error('请先选择一张图片')
+    }
+    return exportInpaintedImage(
+      currentImage.value.file_path,
+      translations,
+      outputPath,
+      options
+    )
+  }
+
+  async function listFonts() {
+    return listAvailableFonts()
+  }
+
   return {
     initialized,
     currentImage,
@@ -151,6 +178,9 @@ export const useAppStore = defineStore('app', () => {
     translateRegion,
     translateSingle,
     search,
-    loadHistory
+    loadHistory,
+    initPainter,
+    exportInpainted,
+    listFonts
   }
 })
