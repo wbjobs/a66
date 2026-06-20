@@ -3,6 +3,8 @@ use image::GenericImageView;
 use crate::models::*;
 use crate::AppResult;
 use crate::AppError;
+use crate::tokenizer::tokenize_chinese;
+use crate::utils::now_str;
 
 pub struct OcrEngine {
     #[cfg(feature = "tesseract")]
@@ -48,23 +50,39 @@ impl OcrEngine {
         let img = image::open(path)
             .map_err(|e| AppError::Image(format!("无法打开图片: {}", e)))?;
         let (img_w, img_h) = img.dimensions();
+        let img_w_f = img_w as f64;
+        let img_h_f = img_h as f64;
 
         let _lang = options
             .and_then(|o| o.lang.as_deref())
             .unwrap_or("eng+chi_sim");
 
-        if self.fallback_mode {
-            return Ok(self.mock_recognize(img_w as i32, img_h as i32, image_id));
-        }
-
-        #[cfg(feature = "tesseract")]
-        {
-            if let Some(ref tess) = self.tess {
-                return self.run_tesseract(tess.clone(), image_path, options, image_id, img_w, img_h);
+        let mut blocks = if self.fallback_mode {
+            self.mock_recognize(img_w as i32, img_h as i32, image_id)
+        } else {
+            #[cfg(feature = "tesseract")]
+            {
+                if let Some(ref tess) = self.tess {
+                    self.run_tesseract(tess.clone(), image_path, options, image_id, img_w, img_h)?
+                } else {
+                    self.mock_recognize(img_w as i32, img_h as i32, image_id)
+                }
             }
+            #[cfg(not(feature = "tesseract"))]
+            {
+                self.mock_recognize(img_w as i32, img_h as i32, image_id)
+            }
+        };
+
+        for block in &mut blocks {
+            block.x = normalize(block.x, img_w_f);
+            block.y = normalize(block.y, img_h_f);
+            block.width = normalize(block.width, img_w_f);
+            block.height = normalize(block.height, img_h_f);
+            block.text_tokenized = tokenize_chinese(&block.text);
         }
 
-        Ok(self.mock_recognize(img_w as i32, img_h as i32, image_id))
+        Ok(blocks)
     }
 
     #[cfg(feature = "tesseract")]
@@ -106,7 +124,7 @@ impl OcrEngine {
             .get_component_images(leptess::tesseract::PageIteratorLevel::Textline, 0)
             .map_err(|e| AppError::Ocr(format!("获取文字框失败: {}", e)))?;
 
-        let now = chrono_now();
+        let now = now_str();
         let mut blocks: Vec<OcrTextBlock> = Vec::with_capacity(boxes.len());
 
         let mut paragraph_map: std::collections::BTreeMap<i32, Vec<usize>> =
@@ -150,12 +168,13 @@ impl OcrEngine {
                     id: 0,
                     image_id,
                     text,
+                    text_tokenized: String::new(),
                     paragraph: para_id.clone(),
                     paragraph_idx: *para_idx * 100 + block_in_para as i32,
-                    x: x as i32,
-                    y: y as i32,
-                    width: w as i32,
-                    height: h as i32,
+                    x: x as f64,
+                    y: y as f64,
+                    width: w as f64,
+                    height: h as f64,
                     confidence,
                     lang: "tesseract".to_string(),
                     created_at: now.clone(),
@@ -172,7 +191,7 @@ impl OcrEngine {
         img_h: i32,
         image_id: i64,
     ) -> Vec<OcrTextBlock> {
-        let now = chrono_now();
+        let now = now_str();
         let sample_lines = vec![
             (
                 "The quick brown fox jumps over the lazy dog.",
@@ -215,12 +234,13 @@ impl OcrEngine {
                 id: 0,
                 image_id,
                 text: en.to_string(),
+                text_tokenized: String::new(),
                 paragraph: format!("p{}", i),
                 paragraph_idx: i_i32 * 100,
-                x: margin_x,
-                y,
-                width: half_w - 10,
-                height: line_h,
+                x: margin_x as f64,
+                y: y as f64,
+                width: (half_w - 10) as f64,
+                height: line_h as f64,
                 confidence: 92.5 + (i as f64) * 0.5,
                 lang: "eng".to_string(),
                 created_at: now.clone(),
@@ -230,12 +250,13 @@ impl OcrEngine {
                 id: 0,
                 image_id,
                 text: zh.to_string(),
+                text_tokenized: String::new(),
                 paragraph: format!("p{}", i),
                 paragraph_idx: i_i32 * 100 + 1,
-                x: margin_x + half_w + 10,
-                y,
-                width: half_w - 10,
-                height: line_h,
+                x: (margin_x + half_w + 10) as f64,
+                y: y as f64,
+                width: (half_w - 10) as f64,
+                height: line_h as f64,
                 confidence: 90.0 + (i as f64) * 0.3,
                 lang: "chi_sim".to_string(),
                 created_at: now.clone(),
@@ -252,49 +273,13 @@ impl Default for OcrEngine {
     }
 }
 
-fn chrono_now() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let dur = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = dur.as_secs() as i64;
-    let offset_secs = 8 * 3600;
-    let utc_secs = secs + offset_secs;
-    let days = utc_secs / 86400;
-    let rem = utc_secs % 86400;
-    let hours = rem / 3600;
-    let mins = (rem % 3600) / 60;
-    let secs = rem % 60;
-    let (y, m, d) = days_to_ymd(days);
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        y, m, d, hours, mins, secs
-    )
-}
-
-fn days_to_ymd(mut days: i64) -> (i32, u32, u32) {
-    days += 719163;
-    let mut year: i32 = (400 * days + 140201) as i32 / 146097;
-    let mut day_of_year = days as i32 - (365 * year + year / 4 - year / 100 + year / 400);
-    while day_of_year < 0 {
-        year -= 1;
-        day_of_year = days as i32 - (365 * year + year / 4 - year / 100 + year / 400);
-    }
-    let feb_days = if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) {
-        29
+#[inline]
+fn normalize(px: f64, dim: f64) -> f64 {
+    if dim <= 0.0 {
+        0.0
     } else {
-        28
-    };
-    let m_days = [31, feb_days, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let mut month: u32 = 1;
-    for &md in &m_days {
-        if day_of_year < md {
-            break;
-        }
-        day_of_year -= md;
-        month += 1;
+        (px / dim).clamp(0.0, 1.0)
     }
-    (year, month, day_of_year as u32 + 1)
 }
 
 pub static OCR: once_cell::sync::Lazy<OcrEngine> = once_cell::sync::Lazy::new(OcrEngine::new);

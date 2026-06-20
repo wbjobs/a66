@@ -4,9 +4,10 @@ pub mod models;
 pub mod db;
 pub mod ocr;
 pub mod translator;
+pub mod tokenizer;
+pub mod utils;
 pub mod commands;
 
-use models::*;
 use std::sync::Arc;
 
 pub use models::{AppResult, AppError};

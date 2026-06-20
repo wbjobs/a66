@@ -96,15 +96,61 @@ function getCaptionStyle(caption: CaptionItem) {
   }
 }
 
+function normToScreen(normX: number, normY: number, normW: number, normH: number) {
+  const x = offsetX.value + normX * naturalWidth.value * scale.value
+  const y = offsetY.value + normY * naturalHeight.value * scale.value
+  const w = normW * naturalWidth.value * scale.value
+  const h = normH * naturalHeight.value * scale.value
+  return { x, y, w, h }
+}
+
+function screenToNorm(
+  screenX: number,
+  screenY: number,
+  screenW: number,
+  screenH: number
+) {
+  const rect = overlayCanvas.value!.getBoundingClientRect()
+  const x = Math.max(
+    0,
+    Math.min(
+      1,
+      (screenX - rect.left - offsetX.value) / scale.value / naturalWidth.value
+    )
+  )
+  const y = Math.max(
+    0,
+    Math.min(
+      1,
+      (screenY - rect.top - offsetY.value) / scale.value / naturalHeight.value
+    )
+  )
+  const w = Math.max(
+    0,
+    Math.min(
+      1 - x,
+      screenW / scale.value / naturalWidth.value
+    )
+  )
+  const h = Math.max(
+    0,
+    Math.min(
+      1 - y,
+      screenH / scale.value / naturalHeight.value
+    )
+  )
+  return { x, y, w, h }
+}
+
 async function loadImage() {
   if (!props.imagePath || !imageCanvas.value) return
-  
+
   const fs = await import('@tauri-apps/api/fs')
   const bytes = await fs.readBinaryFile(props.imagePath)
   const uint8 = new Uint8Array(bytes)
   const blob = new Blob([uint8])
   const url = URL.createObjectURL(blob)
-  
+
   const img = new Image()
   img.onload = () => {
     naturalWidth.value = img.width
@@ -120,20 +166,20 @@ async function loadImage() {
 
 function resizeCanvas() {
   if (!containerRef.value || !imageCanvas.value || !overlayCanvas.value) return
-  
+
   const containerWidth = containerRef.value.clientWidth
   const containerHeight = containerRef.value.clientHeight
-  
+
   const scaleX = containerWidth / naturalWidth.value
   const scaleY = containerHeight / naturalHeight.value
   scale.value = Math.min(scaleX, scaleY, 1)
-  
+
   const displayWidth = naturalWidth.value * scale.value
   const displayHeight = naturalHeight.value * scale.value
-  
+
   offsetX.value = (containerWidth - displayWidth) / 2
   offsetY.value = (containerHeight - displayHeight) / 2
-  
+
   const dpr = window.devicePixelRatio || 1
   for (const canvas of [imageCanvas.value, overlayCanvas.value]) {
     canvas.width = containerWidth * dpr
@@ -158,27 +204,22 @@ function drawOcrBlocks() {
   if (!overlayCanvas.value || !props.ocrBlocks.length) return
   const ctx = overlayCanvas.value.getContext('2d')!
   ctx.clearRect(0, 0, overlayCanvas.value.width, overlayCanvas.value.height)
-  
+
   ctx.strokeStyle = 'rgba(122, 162, 247, 0.6)'
   ctx.lineWidth = 1
   ctx.fillStyle = 'rgba(122, 162, 247, 0.08)'
-  
+
   for (const block of props.ocrBlocks) {
-    const x = offsetX.value + block.x * scale.value
-    const y = offsetY.value + block.y * scale.value
-    const w = block.width * scale.value
-    const h = block.height * scale.value
-    
+    const { x, y, w, h } = normToScreen(
+      block.x,
+      block.y,
+      block.width,
+      block.height
+    )
+
     ctx.fillRect(x, y, w, h)
     ctx.strokeRect(x, y, w, h)
   }
-}
-
-function screenToImageCoords(screenX: number, screenY: number) {
-  const rect = overlayCanvas.value!.getBoundingClientRect()
-  const x = (screenX - rect.left - offsetX.value) / scale.value
-  const y = (screenY - rect.top - offsetY.value) / scale.value
-  return { x: Math.round(x), y: Math.round(y) }
 }
 
 function handleMouseDown(e: MouseEvent) {
@@ -199,47 +240,51 @@ function handleMouseUp() {
     isSelecting.value = false
     return
   }
-  
-  const rect = overlayCanvas.value!.getBoundingClientRect()
+
   const selStart = {
-    x: Math.min(startPos.value.x, currentPos.value.x) - rect.left,
-    y: Math.min(startPos.value.y, currentPos.value.y) - rect.top
+    x: Math.min(startPos.value.x, currentPos.value.x),
+    y: Math.min(startPos.value.y, currentPos.value.y)
   }
   const selEnd = {
-    x: Math.max(startPos.value.x, currentPos.value.x) - rect.left,
-    y: Math.max(startPos.value.y, currentPos.value.y) - rect.top
+    x: Math.max(startPos.value.x, currentPos.value.x),
+    y: Math.max(startPos.value.y, currentPos.value.y)
   }
-  
-  const imgSel = {
-    x: Math.max(0, Math.round((selStart.x - offsetX.value) / scale.value)),
-    y: Math.max(0, Math.round((selStart.y - offsetY.value) / scale.value)),
-    width: Math.min(
-      naturalWidth.value,
-      Math.round((selEnd.x - selStart.x) / scale.value)
-    ),
-    height: Math.min(
-      naturalHeight.value,
-      Math.round((selEnd.y - selStart.y) / scale.value)
-    )
+
+  const screenW = selEnd.x - selStart.x
+  const screenH = selEnd.y - selStart.y
+
+  const normSel = screenToNorm(selStart.x, selStart.y, screenW, screenH)
+
+  if (normSel.w > 0.005 && normSel.h > 0.005) {
+    emit('region-selected', {
+      x: normSel.x,
+      y: normSel.y,
+      width: normSel.w,
+      height: normSel.h
+    })
   }
-  
-  if (imgSel.width > 5 && imgSel.height > 5) {
-    emit('region-selected', imgSel)
-  }
-  
+
   isSelecting.value = false
 }
 
 function updateCaptions(
   translations: Array<{ block: OcrTextBlock; translated_text: string }>
 ) {
-  overlayCaptions.value = translations.map(({ block, translated_text }) => ({
-    x: offsetX.value + block.x * scale.value,
-    y: offsetY.value + block.y * scale.value,
-    width: block.width * scale.value,
-    height: block.height * scale.value,
-    text: translated_text
-  }))
+  overlayCaptions.value = translations.map(({ block, translated_text }) => {
+    const { x, y, w, h } = normToScreen(
+      block.x,
+      block.y,
+      block.width,
+      block.height
+    )
+    return {
+      x,
+      y,
+      width: w,
+      height: h,
+      text: translated_text
+    }
+  })
 }
 
 function handleResize() {

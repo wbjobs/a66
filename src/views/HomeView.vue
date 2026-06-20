@@ -81,7 +81,7 @@
                 v-for="block in para.blocks"
                 :key="block.id"
                 class="block-item"
-                :title="`坐标: (${block.x}, ${block.y}) ${block.width}×${block.height} 置信度: ${(block.confidence.toFixed(1)}%"
+                :title="formatBlockInfo(block)"
               >
                 <span class="block-text">{{ block.text }}</span>
                 <button
@@ -159,6 +159,18 @@ async function runOcr() {
   } catch (e) {
     alert('OCR识别失败: ' + String(e))
   }
+}
+
+function formatBlockInfo(block: OcrTextBlock) {
+  const img = appStore.currentImage
+  if (!img) {
+    return `坐标: (${(block.x * 100).toFixed(2)}%, ${(block.y * 100).toFixed(2)}%) 置信度: ${block.confidence.toFixed(1)}%`
+  }
+  const px = Math.round(block.x * img.width)
+  const py = Math.round(block.y * img.height)
+  const pw = Math.round(block.width * img.width)
+  const ph = Math.round(block.height * img.height)
+  return `坐标: (${px}, ${py}) ${pw}×${ph} | 归一化: (${block.x.toFixed(4)}, ${block.y.toFixed(4)}) | 置信度: ${block.confidence.toFixed(1)}%`
 }
 
 async function handleRegionSelected(rect: any) {

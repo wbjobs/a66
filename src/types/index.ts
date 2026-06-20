@@ -9,6 +9,7 @@ export interface OcrTextBlock {
   id: number
   image_id: number
   text: string
+  text_tokenized: string
   paragraph: string
   paragraph_idx: number
   x: number

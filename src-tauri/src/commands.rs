@@ -3,32 +3,12 @@ use std::fs;
 use std::path::Path;
 use sha2::{Sha256, Digest};
 use image::GenericImageView;
-use tauri::State;
 use crate::models::*;
-use crate::db::{self, DB};
+use crate::db::DB;
 use crate::ocr::OCR;
 use crate::translator::TRANSLATOR;
+use crate::utils::now_str;
 use crate::{AppResult, AppError};
-
-fn now_str() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let dur = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = dur.as_secs() as i64;
-    let offset_secs = 8 * 3600;
-    let utc_secs = secs + offset_secs;
-    let days = utc_secs / 86400;
-    let rem = utc_secs % 86400;
-    let hours = rem / 3600;
-    let mins = (rem % 3600) / 60;
-    let secs = rem % 60;
-    let (y, m, d) = crate::ocr::days_to_ymd(days);
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        y, m, d, hours, mins, secs
-    )
-}
 
 fn compute_hash(path: &str) -> AppResult<String> {
     let data = fs::read(path)?;

@@ -144,9 +144,9 @@ impl TranslateEngine {
 
     fn translate_zh_to_en(&self, text: &str) -> String {
         let dict = self.dict.lock();
-        let reverse: HashMap<&str, &str> = dict
+        let reverse: HashMap<String, String> = dict
             .iter()
-            .map(|(k, v)| (v.as_str(), k.as_str()))
+            .map(|(k, v)| (v.clone(), k.clone()))
             .collect();
         drop(dict);
 
@@ -158,7 +158,7 @@ impl TranslateEngine {
             for len in (2..=6).rev() {
                 if i + len <= chars.len() {
                     let seg: String = chars[i..i + len].iter().collect();
-                    if let Some(t) = reverse.get(seg.as_str()) {
+                    if let Some(t) = reverse.get(&seg) {
                         if !result.is_empty() {
                             result.push(' ');
                         }
@@ -246,7 +246,8 @@ impl Default for TranslateEngine {
 
 fn detect_lang(text: &str) -> String {
     let chinese_count = text.chars().filter(|c| {
-        matches!(c as u32,
+        let code = *c as u32;
+        matches!(code,
             0x4E00..=0x9FFF |
             0x3400..=0x4DBF |
             0x20000..=0x2A6DF

@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use once_cell::sync::Lazy;
 use crate::models::*;
 use crate::AppResult;
+use crate::tokenizer::{tokenize_chinese, tokenize_for_search};
 
 pub struct Database {
     conn: Mutex<Connection>,
@@ -47,81 +48,89 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_images_hash ON images(hash);
             CREATE INDEX IF NOT EXISTS idx_images_created_at ON images(created_at);
 
-            CREATE TABLE IF NOT EXISTS ocr_blocks (
+            DROP TABLE IF EXISTS ocr_blocks;
+            DROP TABLE IF EXISTS translations;
+            DROP TABLE IF EXISTS ocr_blocks_fts;
+            DROP TABLE IF EXISTS translations_fts;
+
+            CREATE TABLE ocr_blocks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 image_id INTEGER NOT NULL,
                 text TEXT NOT NULL,
+                text_tokenized TEXT NOT NULL DEFAULT '',
                 paragraph TEXT NOT NULL,
                 paragraph_idx INTEGER NOT NULL DEFAULT 0,
-                x INTEGER NOT NULL,
-                y INTEGER NOT NULL,
-                width INTEGER NOT NULL,
-                height INTEGER NOT NULL,
+                x REAL NOT NULL,
+                y REAL NOT NULL,
+                width REAL NOT NULL,
+                height REAL NOT NULL,
                 confidence REAL NOT NULL DEFAULT 0,
                 lang TEXT NOT NULL DEFAULT 'unknown',
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 FOREIGN KEY (image_id) REFERENCES images(id) ON DELETE CASCADE
             );
 
-            CREATE INDEX IF NOT EXISTS idx_ocr_blocks_image_id ON ocr_blocks(image_id);
-            CREATE INDEX IF NOT EXISTS idx_ocr_blocks_coords ON ocr_blocks(image_id, x, y);
+            CREATE INDEX idx_ocr_blocks_image_id ON ocr_blocks(image_id);
+            CREATE INDEX idx_ocr_blocks_coords ON ocr_blocks(image_id, x, y);
 
-            CREATE TABLE IF NOT EXISTS translations (
+            CREATE TABLE translations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ocr_block_id INTEGER NOT NULL,
                 source_text TEXT NOT NULL,
+                source_text_tokenized TEXT NOT NULL DEFAULT '',
                 translated_text TEXT NOT NULL,
+                translated_text_tokenized TEXT NOT NULL DEFAULT '',
                 source_lang TEXT NOT NULL,
                 target_lang TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 FOREIGN KEY (ocr_block_id) REFERENCES ocr_blocks(id) ON DELETE CASCADE
             );
 
-            CREATE INDEX IF NOT EXISTS idx_translations_ocr_block ON translations(ocr_block_id);
+            CREATE INDEX idx_translations_ocr_block ON translations(ocr_block_id);
 
-            CREATE VIRTUAL TABLE IF NOT EXISTS ocr_blocks_fts USING fts5(
-                text,
+            CREATE VIRTUAL TABLE ocr_blocks_fts USING fts5(
+                text_tokenized,
                 content='ocr_blocks',
                 content_rowid='id',
                 tokenize='unicode61'
             );
 
-            CREATE TRIGGER IF NOT EXISTS ocr_blocks_ai AFTER INSERT ON ocr_blocks BEGIN
-                INSERT INTO ocr_blocks_fts(rowid, text) VALUES (new.id, new.text);
+            CREATE TRIGGER ocr_blocks_ai AFTER INSERT ON ocr_blocks BEGIN
+                INSERT INTO ocr_blocks_fts(rowid, text_tokenized) VALUES (new.id, new.text_tokenized);
             END;
 
-            CREATE TRIGGER IF NOT EXISTS ocr_blocks_ad AFTER DELETE ON ocr_blocks BEGIN
-                INSERT INTO ocr_blocks_fts(ocr_blocks_fts, rowid, text) VALUES('delete', old.id, old.text);
+            CREATE TRIGGER ocr_blocks_ad AFTER DELETE ON ocr_blocks BEGIN
+                INSERT INTO ocr_blocks_fts(ocr_blocks_fts, rowid, text_tokenized) VALUES('delete', old.id, old.text_tokenized);
             END;
 
-            CREATE TRIGGER IF NOT EXISTS ocr_blocks_au AFTER UPDATE ON ocr_blocks BEGIN
-                INSERT INTO ocr_blocks_fts(ocr_blocks_fts, rowid, text) VALUES('delete', old.id, old.text);
-                INSERT INTO ocr_blocks_fts(rowid, text) VALUES (new.id, new.text);
+            CREATE TRIGGER ocr_blocks_au AFTER UPDATE ON ocr_blocks BEGIN
+                INSERT INTO ocr_blocks_fts(ocr_blocks_fts, rowid, text_tokenized) VALUES('delete', old.id, old.text_tokenized);
+                INSERT INTO ocr_blocks_fts(rowid, text_tokenized) VALUES (new.id, new.text_tokenized);
             END;
 
-            CREATE VIRTUAL TABLE IF NOT EXISTS translations_fts USING fts5(
-                source_text,
-                translated_text,
+            CREATE VIRTUAL TABLE translations_fts USING fts5(
+                source_text_tokenized,
+                translated_text_tokenized,
                 content='translations',
                 content_rowid='id',
                 tokenize='unicode61'
             );
 
-            CREATE TRIGGER IF NOT EXISTS translations_ai AFTER INSERT ON translations BEGIN
-                INSERT INTO translations_fts(rowid, source_text, translated_text)
-                VALUES (new.id, new.source_text, new.translated_text);
+            CREATE TRIGGER translations_ai AFTER INSERT ON translations BEGIN
+                INSERT INTO translations_fts(rowid, source_text_tokenized, translated_text_tokenized)
+                VALUES (new.id, new.source_text_tokenized, new.translated_text_tokenized);
             END;
 
-            CREATE TRIGGER IF NOT EXISTS translations_ad AFTER DELETE ON translations BEGIN
-                INSERT INTO translations_fts(translations_fts, rowid, source_text, translated_text)
-                VALUES('delete', old.id, old.source_text, old.translated_text);
+            CREATE TRIGGER translations_ad AFTER DELETE ON translations BEGIN
+                INSERT INTO translations_fts(translations_fts, rowid, source_text_tokenized, translated_text_tokenized)
+                VALUES('delete', old.id, old.source_text_tokenized, old.translated_text_tokenized);
             END;
 
-            CREATE TRIGGER IF NOT EXISTS translations_au AFTER UPDATE ON translations BEGIN
-                INSERT INTO translations_fts(translations_fts, rowid, source_text, translated_text)
-                VALUES('delete', old.id, old.source_text, old.translated_text);
-                INSERT INTO translations_fts(rowid, source_text, translated_text)
-                VALUES (new.id, new.source_text, new.translated_text);
+            CREATE TRIGGER translations_au AFTER UPDATE ON translations BEGIN
+                INSERT INTO translations_fts(translations_fts, rowid, source_text_tokenized, translated_text_tokenized)
+                VALUES('delete', old.id, old.source_text_tokenized, old.translated_text_tokenized);
+                INSERT INTO translations_fts(rowid, source_text_tokenized, translated_text_tokenized)
+                VALUES (new.id, new.source_text_tokenized, new.translated_text_tokenized);
             END;
             "#,
         )?;
@@ -197,12 +206,18 @@ impl Database {
     pub fn save_ocr_blocks(&self, blocks: &[OcrTextBlock]) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         for block in blocks {
+            let tokenized = if block.text_tokenized.is_empty() {
+                tokenize_chinese(&block.text)
+            } else {
+                block.text_tokenized.clone()
+            };
             conn.execute(
-                "INSERT INTO ocr_blocks (image_id, text, paragraph, paragraph_idx, x, y, width, height, confidence, lang, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                "INSERT INTO ocr_blocks (image_id, text, text_tokenized, paragraph, paragraph_idx, x, y, width, height, confidence, lang, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     block.image_id,
                     block.text,
+                    tokenized,
                     block.paragraph,
                     block.paragraph_idx,
                     block.x,
@@ -227,7 +242,7 @@ impl Database {
     pub fn get_ocr_blocks(&self, image_id: i64) -> AppResult<Vec<OcrTextBlock>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, image_id, text, paragraph, paragraph_idx, x, y, width, height, confidence, lang, created_at
+            "SELECT id, image_id, text, text_tokenized, paragraph, paragraph_idx, x, y, width, height, confidence, lang, created_at
              FROM ocr_blocks WHERE image_id = ?1 ORDER BY paragraph_idx, y, x",
         )?;
         let blocks = stmt
@@ -243,50 +258,68 @@ impl Database {
         threshold: f64,
     ) -> AppResult<Vec<OcrTextBlock>> {
         let conn = self.conn.lock().unwrap();
-        let rx1 = rect.x as f64;
-        let ry1 = rect.y as f64;
-        let rx2 = (rect.x + rect.width) as f64;
-        let ry2 = (rect.y + rect.height) as f64;
+
+        let rx1 = rect.x.clamp(0.0, 1.0);
+        let ry1 = rect.y.clamp(0.0, 1.0);
+        let rx2 = (rect.x + rect.width).clamp(0.0, 1.0);
+        let ry2 = (rect.y + rect.height).clamp(0.0, 1.0);
 
         let mut stmt = conn.prepare(
-            "SELECT id, image_id, text, paragraph, paragraph_idx, x, y, width, height, confidence, lang, created_at
-             FROM ocr_blocks WHERE image_id = ?1",
+            "SELECT id, image_id, text, text_tokenized, paragraph, paragraph_idx, x, y, width, height, confidence, lang, created_at
+             FROM ocr_blocks
+             WHERE image_id = ?1
+               AND x + width > ?2
+               AND y + height > ?3
+               AND x < ?4
+               AND y < ?5",
         )?;
         let blocks: Vec<OcrTextBlock> = stmt
-            .query_map(params![image_id], row_to_block)?
+            .query_map(params![image_id, rx1, ry1, rx2, ry2], row_to_block)?
             .collect::<Result<Vec<_>, _>>()?;
 
         let filtered: Vec<OcrTextBlock> = blocks
             .into_iter()
             .filter(|b| {
-                let bx1 = b.x as f64;
-                let by1 = b.y as f64;
-                let bx2 = (b.x + b.width) as f64;
-                let by2 = (b.y + b.height) as f64;
+                let bx1 = b.x;
+                let by1 = b.y;
+                let bx2 = b.x + b.width;
+                let by2 = b.y + b.height;
+
                 let ix1 = bx1.max(rx1);
                 let iy1 = by1.max(ry1);
                 let ix2 = bx2.min(rx2);
                 let iy2 = by2.min(ry2);
+
                 if ix2 <= ix1 || iy2 <= iy1 {
                     return false;
                 }
+
                 let inter = (ix2 - ix1) * (iy2 - iy1);
                 let block_area = (bx2 - bx1) * (by2 - by1);
+                if block_area <= 0.0 {
+                    return false;
+                }
+
                 inter / block_area >= threshold
             })
             .collect();
+
         Ok(filtered)
     }
 
     pub fn save_translation(&self, t: &TranslateResult) -> AppResult<i64> {
         let conn = self.conn.lock().unwrap();
+        let source_tokenized = tokenize_chinese(&t.source_text);
+        let target_tokenized = tokenize_chinese(&t.translated_text);
         conn.execute(
-            "INSERT INTO translations (ocr_block_id, source_text, translated_text, source_lang, target_lang, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO translations (ocr_block_id, source_text, source_text_tokenized, translated_text, translated_text_tokenized, source_lang, target_lang, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 t.ocr_block_id,
                 t.source_text,
+                source_tokenized,
                 t.translated_text,
+                target_tokenized,
                 t.source_lang,
                 t.target_lang,
                 t.created_at,
@@ -322,9 +355,11 @@ impl Database {
         let mut matched_blocks = Vec::new();
 
         if has_kw {
-            let fts_query = format_fts_query(kw);
+            let fts_query = tokenize_for_search(kw);
+            log::debug!("FTS搜索查询: {}", fts_query);
+
             let mut block_stmt = conn.prepare(
-                "SELECT b.id, b.image_id, b.text, b.paragraph, b.paragraph_idx, b.x, b.y, b.width, b.height, b.confidence, b.lang, b.created_at
+                "SELECT b.id, b.image_id, b.text, b.text_tokenized, b.paragraph, b.paragraph_idx, b.x, b.y, b.width, b.height, b.confidence, b.lang, b.created_at
                  FROM ocr_blocks_fts f
                  JOIN ocr_blocks b ON b.id = f.rowid
                  WHERE ocr_blocks_fts MATCH ?1
@@ -339,7 +374,7 @@ impl Database {
             }
 
             let mut trans_stmt = conn.prepare(
-                "SELECT b.id, b.image_id, b.text, b.paragraph, b.paragraph_idx, b.x, b.y, b.width, b.height, b.confidence, b.lang, b.created_at
+                "SELECT b.id, b.image_id, b.text, b.text_tokenized, b.paragraph, b.paragraph_idx, b.x, b.y, b.width, b.height, b.confidence, b.lang, b.created_at
                  FROM translations_fts f
                  JOIN translations t ON t.id = f.rowid
                  JOIN ocr_blocks b ON b.id = t.ocr_block_id
@@ -429,10 +464,11 @@ impl Database {
 }
 
 pub static DB: Lazy<Database> = Lazy::new(|| {
-    let app_data_dir = tauri::api::path::app_data_dir(
-        &tauri::generate_context!().config()
-    ).expect("无法获取应用数据目录");
-    let db_path = app_data_dir.join("ocr_translate.db");
+    let db_path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("ocr_translate.db");
     Database::new(db_path).expect("数据库初始化失败")
 });
 
@@ -455,15 +491,16 @@ fn row_to_block(row: &rusqlite::Row) -> rusqlite::Result<OcrTextBlock> {
         id: row.get(0)?,
         image_id: row.get(1)?,
         text: row.get(2)?,
-        paragraph: row.get(3)?,
-        paragraph_idx: row.get(4)?,
-        x: row.get(5)?,
-        y: row.get(6)?,
-        width: row.get(7)?,
-        height: row.get(8)?,
-        confidence: row.get(9)?,
-        lang: row.get(10)?,
-        created_at: row.get(11)?,
+        text_tokenized: row.get(3)?,
+        paragraph: row.get(4)?,
+        paragraph_idx: row.get(5)?,
+        x: row.get(6)?,
+        y: row.get(7)?,
+        width: row.get(8)?,
+        height: row.get(9)?,
+        confidence: row.get(10)?,
+        lang: row.get(11)?,
+        created_at: row.get(12)?,
     })
 }
 
@@ -477,17 +514,4 @@ fn row_to_translation(row: &rusqlite::Row) -> rusqlite::Result<TranslateResult> 
         target_lang: row.get(5)?,
         created_at: row.get(6)?,
     })
-}
-
-fn format_fts_query(kw: &str) -> String {
-    let parts: Vec<&str> = kw.split_whitespace().collect();
-    if parts.len() == 1 {
-        format!("{}*", parts[0])
-    } else {
-        parts
-            .iter()
-            .map(|p| format!("{}*", p))
-            .collect::<Vec<_>>()
-            .join(" AND ")
-    }
 }

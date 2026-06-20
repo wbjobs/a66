@@ -32,10 +32,10 @@ pub type AppResult<T> = Result<T, AppError>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rect {
-    pub x: i32,
-    pub y: i32,
-    pub width: i32,
-    pub height: i32,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,12 +56,13 @@ pub struct OcrTextBlock {
     pub id: i64,
     pub image_id: i64,
     pub text: String,
+    pub text_tokenized: String,
     pub paragraph: String,
     pub paragraph_idx: i32,
-    pub x: i32,
-    pub y: i32,
-    pub width: i32,
-    pub height: i32,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
     pub confidence: f64,
     pub lang: String,
     pub created_at: String,
